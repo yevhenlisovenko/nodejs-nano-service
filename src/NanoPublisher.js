@@ -6,6 +6,9 @@ class NanoPublisher {
   constructor() {
     this.connection = null;
     this.channel = null;
+    this.message = null;
+    this.delay = null;
+    this.meta = {};
   }
 
   async getConnection() {
@@ -30,26 +33,61 @@ class NanoPublisher {
     return this.channel;
   }
 
-  async publish(event, payload) {
+  setMeta(data) {
+    this.meta = { ...this.meta, ...data };
+    return this;
+  }
+
+  setMessage(message) {
+    this.message = message;
+    return this;
+  }
+
+  delay(milliseconds) {
+    this.delay = milliseconds;
+    return this;
+  }
+
+  async publish(event) {
+    if (process.env.AMQP_PUBLISHER_ENABLED !== "true") {
+      return;
+    }
+
     const channel = await this.getChannel();
     const exchange = `${process.env.AMQP_PROJECT}.bus`;
-    const routingKey = `${process.env.AMQP_PROJECT}.${event}`;
+    const routingKey = `${event}`;
 
     await channel.assertExchange(exchange, "x-delayed-message", {
       durable: true,
-      arguments: { "x-delayed-type": "topic" }, // Preserve topic routing
+      arguments: { "x-delayed-type": "topic" },
     });
-    const message = new NanoServiceMessage(event, payload);
 
-    try {
-      channel.publish(exchange, routingKey, Buffer.from(message.toJson()));
-    } catch (err) {
-      console.error("Publishing Error:", err);
+    this.message.setEvent(event);
+    this.message.set(
+      "app_id",
+      `${process.env.AMQP_PROJECT}.${process.env.AMQP_MICROSERVICE_NAME}`
+    );
+
+    if (this.delay) {
+      this.message.set("application_headers", { "x-delay": this.delay });
     }
 
+    if (Object.keys(this.meta).length > 0) {
+      this.message.addMeta(this.meta);
+    }
+
+    channel.publish(exchange, routingKey, Buffer.from(this.message.toJson()), {
+      headers: this.message.application_headers || {},
+    });
+
     console.log(
-      `Published event: ${event} to exchange: ${exchange} with routingKey: ${routingKey}`
+      `✅ Published event: ${event} to exchange: ${exchange} with routingKey: ${routingKey}`
     );
+
+    await channel.close();
+    await this.connection.close();
+    this.connection = null;
+    this.channel = null;
   }
 }
 

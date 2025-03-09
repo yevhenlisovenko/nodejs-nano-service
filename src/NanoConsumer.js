@@ -7,7 +7,7 @@ class NanoConsumer {
     this.connection = null;
     this.channel = null;
     this.event = event;
-    this.queue = `${process.env.AMQP_PROJECT}.${event}`;
+    this.queue = `${process.env.AMQP_PROJECT}.${process.env.AMQP_MICROSERVICE_NAME}`;
     this.exchange = `${process.env.AMQP_PROJECT}.bus`;
   }
 
@@ -37,19 +37,23 @@ class NanoConsumer {
     const channel = await this.getChannel();
     await channel.assertExchange(this.exchange, "x-delayed-message", {
       durable: true,
-      arguments: { "x-delayed-type": "topic" }, // Preserve topic routing
+      arguments: { "x-delayed-type": "topic" },
     });
     await channel.assertQueue(this.queue, { durable: true });
-    await channel.bindQueue(this.queue, this.exchange, this.queue);
+    await channel.bindQueue(this.queue, this.exchange, this.event);
     console.log(
-      `Subscribed to event: ${this.event} in exchange: ${this.exchange}`
+      `Subscribed to event: ${this.event} in exchange: ${this.exchange} with queue: ${this.queue}`
     );
 
     channel.consume(this.queue, (msg) => {
       if (msg !== null) {
+        console.log("🔹 Raw message received:", msg.content.toString());
         const message = NanoServiceMessage.fromJson(msg.content.toString());
+        console.log("✅ Parsed message:", message);
         callback(message);
         channel.ack(msg);
+      } else {
+        console.log("⚠️ Received an empty message");
       }
     });
   }
