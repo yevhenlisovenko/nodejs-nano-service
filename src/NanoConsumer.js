@@ -16,7 +16,7 @@ class NanoConsumer {
     this.events = [];
     this.tries = 3;
     this.backoff = 0;
-    this.queue = `${process.env.AMQP_MICROSERVICE_NAME}`;
+    this.queue = `${process.env.AMQP_PROJECT}.${process.env.AMQP_MICROSERVICE_NAME}`;
     this.exchange = `${process.env.AMQP_PROJECT}.bus`;
   }
 

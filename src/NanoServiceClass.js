@@ -4,10 +4,10 @@ const amqp = require("amqplib");
 class NanoServiceClass {
   constructor(config = {}) {
     this.config = config;
-    this.exchange = "bus";
-    this.queue = "default";
-    this.channel = null;
     this.connection = null;
+    this.channel = null;
+    this.exchange = `${process.env.AMQP_PROJECT}.bus`;
+    this.queue = this.getNamespace(process.env.AMQP_MICROSERVICE_NAME);
   }
 
   async getConnection() {
@@ -32,14 +32,17 @@ class NanoServiceClass {
     return this.channel;
   }
 
-  async exchange(exchange, type = "topic", options = {}) {
+  async exchange(exchange, exchangeType = "topic", options = {}) {
     this.exchange = this.getNamespace(exchange);
-    return this.createExchange(this.exchange, type, options);
+    return this.createExchange(this.exchange, exchangeType, options);
   }
 
-  async createExchange(exchange, type = "topic", options = {}) {
+  async createExchange(exchange, exchangeType = "topic", options = {}) {
     const channel = await this.getChannel();
-    await channel.assertExchange(exchange, type, { durable: true, ...options });
+    await channel.assertExchange(exchange, exchangeType, {
+      durable: true,
+      ...options,
+    });
     return this;
   }
 
