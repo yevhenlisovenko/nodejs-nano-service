@@ -48,9 +48,15 @@ class NanoConsumer {
     channel.consume(this.queue, (msg) => {
       if (msg !== null) {
         console.log("🔹 Raw message received:", msg.content.toString());
-        const message = NanoServiceMessage.fromJson(msg.content.toString());
-        console.log("✅ Parsed message:", message);
-        callback(message);
+        const parsedMessage = JSON.parse(msg.content.toString());
+
+        // Ensure correct event type extraction
+        const eventType =
+          parsedMessage.event || parsedMessage.type || "unknown";
+        parsedMessage.type = eventType;
+
+        console.log("✅ Parsed message:", parsedMessage);
+        callback(new NanoServiceMessage(eventType, parsedMessage.payload));
         channel.ack(msg);
       } else {
         console.log("⚠️ Received an empty message");
