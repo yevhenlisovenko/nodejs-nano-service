@@ -1,23 +1,46 @@
-require("dotenv").config();
 const amqp = require("amqplib");
 const NanoServiceMessage = require("./NanoServiceMessage");
 
 class NanoConsumer {
   static FAILED_POSTFIX = ".failed";
 
-  constructor(events = []) {
+  constructor() {
     this.connection = null;
     this.channel = null;
+    this.eventsList = [];
     this.handlers = {};
     this.callback = null;
     this.catchCallback = null;
     this.failedCallback = null;
-    this.debugCallback = null;
-    this.events = events; // ✅ Events now passed in constructor
-    this.tries = 3;
-    this.backoff = [5, 15, 60, 300];
+    this.triesCount = 3;
+    this.backoffIntervals = [5000, 15000, 60000];
     this.queue = `${process.env.AMQP_PROJECT}.${process.env.AMQP_MICROSERVICE_NAME}`;
     this.exchange = `${process.env.AMQP_PROJECT}.bus`;
+  }
+
+  events(...events) {
+    this.eventsList = events;
+    return this;
+  }
+
+  tries(count) {
+    this.triesCount = count;
+    return this;
+  }
+
+  backoff(intervals) {
+    this.backoffIntervals = Array.isArray(intervals) ? intervals : [intervals];
+    return this;
+  }
+
+  catch(callback) {
+    this.catchCallback = callback;
+    return this;
+  }
+
+  failed(callback) {
+    this.failedCallback = callback;
+    return this;
   }
 
   async getConnection() {
@@ -43,131 +66,81 @@ class NanoConsumer {
   }
 
   async init() {
-    await this.initialWithFailedQueue();
-    const channel = await this.getChannel();
-    await channel.assertExchange(this.exchange, "topic", { durable: true });
-
-    for (const event of this.events) {
-      await channel.bindQueue(this.queue, this.exchange, event);
-    }
-    for (const systemEvent of Object.keys(this.handlers)) {
-      await channel.bindQueue(this.queue, this.exchange, systemEvent);
-    }
-  }
-
-  async initialWithFailedQueue() {
     const channel = await this.getChannel();
     const dlx = `${this.queue}${NanoConsumer.FAILED_POSTFIX}`;
 
+    // Exchange (bus)
     await channel.assertExchange(this.exchange, "topic", { durable: true });
 
+    // Main queue with DLX
     await channel.assertQueue(this.queue, {
       durable: true,
       arguments: { "x-dead-letter-exchange": dlx },
     });
-    await channel.assertExchange(dlx, "x-delayed-message", {
+
+    // Delayed exchange for retries
+    await channel.assertExchange(this.queue, "x-delayed-message", {
       durable: true,
       arguments: { "x-delayed-type": "topic" },
     });
+
+    // DLX Queue
     await channel.assertQueue(dlx, { durable: true });
-    await channel.bindQueue(this.queue, dlx, "#");
+
+    // Bind main queue to delayed exchange for retry
+    await channel.bindQueue(this.queue, this.queue, "#");
+
+    // Bind events
+    for (const event of this.eventsList) {
+      await channel.bindQueue(this.queue, this.exchange, event);
+    }
   }
 
-  tries(attempts) {
-    // ✅ ADDED METHOD
-    this.tries = attempts;
-    return this;
-  }
-
-  backoff(seconds) {
-    // ✅ ADDED METHOD
-    this.backoff = Array.isArray(seconds) ? seconds : [seconds];
-    return this;
-  }
-
-  catch(callback) {
-    this.catchCallback = callback;
-    return this;
-  }
-
-  failed(callback) {
-    this.failedCallback = callback;
-    return this;
-  }
-
-  async consume(callback, debugCallback = null) {
-    await this.init();
+  async consume(callback) {
     this.callback = callback;
-    this.debugCallback = debugCallback;
+    await this.init();
     const channel = await this.getChannel();
     await channel.prefetch(1);
 
     channel.consume(this.queue, async (msg) => {
-      if (msg) {
-        const message = new NanoServiceMessage(
-          msg.content.toString(),
-          msg.properties
-        );
-        const eventType = message.type;
-        let retryCount = (message.getRetryCount() || 0) + 1;
+      const message = NanoServiceMessage.fromJson(msg.content.toString());
+      const eventType = message.type;
+      const retryCount = (msg.properties.headers["x-retry-count"] || 0) + 1;
 
-        if (this.handlers[eventType]) {
-          try {
-            await this.handlers[eventType](message);
-            channel.ack(msg);
-            return;
-          } catch (error) {
-            console.error("Handler error, retrying...", error);
-          }
-        }
+      try {
+        await this.callback(message);
+        channel.ack(msg);
+      } catch (error) {
+        if (retryCount < this.triesCount) {
+          if (this.catchCallback) this.catchCallback(error, message);
 
-        try {
-          await this.callback(message);
-          channel.ack(msg);
-        } catch (error) {
-          if (retryCount < this.tries) {
-            if (this.catchCallback) {
-              this.catchCallback(error, message);
-            }
-            const headers = {
+          channel.publish(this.queue, eventType, msg.content, {
+            headers: {
               "x-delay": this.getBackoff(retryCount),
               "x-retry-count": retryCount,
-            };
-            channel.publish(
-              this.exchange,
-              eventType,
-              Buffer.from(message.toJson()),
-              { headers }
-            );
-            channel.ack(msg);
-          } else {
-            if (this.failedCallback) {
-              this.failedCallback(error, message);
+            },
+          });
+        } else {
+          if (this.failedCallback) this.failedCallback(error, message);
+
+          channel.publish(
+            "",
+            this.queue + NanoConsumer.FAILED_POSTFIX,
+            msg.content,
+            {
+              headers: { "x-retry-count": retryCount },
             }
-            const headers = { "x-retry-count": retryCount };
-            channel.publish(
-              "",
-              this.queue + NanoConsumer.FAILED_POSTFIX,
-              Buffer.from(message.toJson()),
-              { headers }
-            );
-            channel.ack(msg);
-          }
+          );
         }
+        channel.ack(msg);
       }
     });
   }
 
-  async shutdown() {
-    if (this.channel) await this.channel.close();
-    if (this.connection) await this.connection.close();
-  }
-
   getBackoff(retryCount) {
-    return (
-      (this.backoff[Math.min(retryCount - 1, this.backoff.length - 1)] || 0) *
-      1000
-    );
+    return this.backoffIntervals[
+      Math.min(retryCount - 1, this.backoffIntervals.length - 1)
+    ];
   }
 }
 
