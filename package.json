@@ -1,11 +1,48 @@
 {
   "name": "nodejs-nano-service",
   "version": "1.0.0",
+  "description": "A lightweight event-driven microservices package for RabbitMQ in Node.js. Enables scalable message publishing and consuming for distributed systems.",
   "main": "index.js",
+  "scripts": {
+    "test": "echo \"No tests defined\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yevhenlisovenko/nodejs-nano-service.git"
+  },
+  "keywords": [
+    "nodejs",
+    "microservices",
+    "event-driven",
+    "rabbitmq",
+    "message-queue",
+    "pubsub",
+    "async",
+    "distributed-systems",
+    "queueing",
+    "event-bus",
+    "event-processing",
+    "message-broker",
+    "scalable-architecture",
+    "high-performance",
+    "cloud-native",
+    "event-driven-architecture",
+    "real-time-processing",
+    "amqp",
+    "enterprise-integration",
+    "messaging",
+    "serverless"
+  ],
+  "author": "Yevhen Lisovenko <yevhenlisovenko@gmail.com>",
   "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/yevhenlisovenko/nodejs-nano-service/issues"
+  },
+  "homepage": "https://awescode.com",
   "dependencies": {
-    "amqplib": "^0.10.5",
-    "dotenv": "^16.4.7",
-    "uuid": "^11.1.0"
+    "amqplib": "^0.10.3",
+    "dotenv": "^16.0.3",
+    "uuid": "^9.0.0",
+    "winston": "^3.8.2"
   }
 }
