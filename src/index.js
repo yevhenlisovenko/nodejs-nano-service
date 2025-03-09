@@ -1,6 +1,9 @@
+const NanoConsumer = require("./NanoConsumer");
+const NanoPublisher = require("./NanoPublisher");
+const NanoServiceMessage = require("./NanoServiceMessage");
+
 module.exports = {
-  NanoPublisher: require("./NanoPublisher"),
-  NanoConsumer: require("./NanoConsumer"),
-  NanoServiceMessage: require("./NanoServiceMessage"),
-  NanoServiceClass: require("./NanoServiceClass"),
+  NanoConsumer,
+  NanoPublisher,
+  NanoServiceMessage,
 };

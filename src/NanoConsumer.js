@@ -1,163 +1,236 @@
-require("dotenv").config();
-const amqp = require("amqplib");
+const NanoServiceClass = require("./NanoServiceClass");
 const NanoServiceMessage = require("./NanoServiceMessage");
 
-class NanoConsumer {
-  static FAILED_POSTFIX = ".failed";
-
-  constructor(events = []) {
-    this.connection = null;
-    this.channel = null;
-    this.handlers = {};
-    this.callback = null;
+class NanoConsumer extends NanoServiceClass {
+  constructor() {
+    super();
+    this.exchange = this.getNamespace("bus");
+    this.FAILED_POSTFIX = ".failed";
+    this.handlers = { "system.ping.1": this.handleSystemPing.bind(this) };
+    this._tries = 3;
+    this._backoff = 0;
+    this._events = [];
     this.catchCallback = null;
     this.failedCallback = null;
-    this.debugCallback = null;
-    this.events = events;
-    this.tries = 3;
-    this.backoff = [5, 15, 60, 300];
-    this.queue = `${process.env.AMQP_PROJECT}.${process.env.AMQP_MICROSERVICE_NAME}`;
-    this.exchange = `${process.env.AMQP_PROJECT}.bus`;
   }
 
-  async getConnection() {
-    if (!this.connection) {
-      this.connection = await amqp.connect({
-        protocol: "amqp",
-        hostname: process.env.AMQP_HOST,
-        port: process.env.AMQP_PORT,
-        username: process.env.AMQP_USER,
-        password: process.env.AMQP_PASS,
-        vhost: process.env.AMQP_VHOST,
-      });
-    }
-    return this.connection;
+  // Set the number of retry attempts
+  tries(attempts) {
+    this._tries = attempts;
+    return this; // Return `this` for method chaining
   }
 
-  async getChannel() {
-    if (!this.channel) {
-      const conn = await this.getConnection();
-      this.channel = await conn.createChannel();
-    }
-    return this.channel;
+  // Set the backoff intervals (in seconds)
+  backoff(intervals) {
+    this._backoff = intervals;
+    return this; // Return `this` for method chaining
   }
 
+  // Set the callback for transient errors
+  catch(callback) {
+    this.catchCallback = callback;
+    return this; // Return `this` for method chaining
+  }
+
+  // Set the callback for permanent failures
+  failed(callback) {
+    this.failedCallback = callback;
+    return this; // Return `this` for method chaining
+  }
+
+  // Bind events to the queue
+  events(...events) {
+    this._events = events;
+    return this; // Return `this` for method chaining
+  }
+
+  // Initialize the consumer
   async init() {
-    await this.initialWithFailedQueue();
-    const channel = await this.getChannel();
-    await channel.assertExchange(this.exchange, "topic", { durable: true });
+    await this.setupFailedQueue();
+    await this.createExchangeIfNotExists(); // Create the exchange if it doesn't exist
+    await this.bindEvents();
+  }
 
-    for (const event of this.events) {
-      await channel.bindQueue(this.queue, this.exchange, event);
-    }
+  // Create the exchange if it doesn't exist
+  async createExchangeIfNotExists() {
+    const exchange = this.exchange; // Use the fully namespaced exchange name
+    const ch = await this.getChannel();
 
-    for (const systemEvent of Object.keys(this.handlers)) {
-      await channel.bindQueue(this.queue, this.exchange, systemEvent);
+    try {
+      // Check if the exchange exists by attempting to declare it passively
+      await ch.checkExchange(exchange);
+      console.log(`Skipped. Exchange '${exchange}' already exists.`);
+    } catch (err) {
+      if (err.code === 404) {
+        // Exchange does not exist, so create it
+        await this.createExchange(exchange, "topic", { durable: true });
+        console.log(`Exchange '${exchange}' created.`);
+      } else {
+        throw err; // Re-throw other errors
+      }
     }
   }
 
-  async initialWithFailedQueue() {
-    const channel = await this.getChannel();
-    const dlx = `${this.queue}${NanoConsumer.FAILED_POSTFIX}`;
+  // Set up the failed queue and dead-letter exchange
+  async setupFailedQueue() {
+    const queue = this.getNamespace(this.getEnv("AMQP_MICROSERVICE_NAME")); // Use the full namespace for the queue name
+    const dlx = `${queue}${this.FAILED_POSTFIX}`; // Failed queue name
 
-    await channel.assertQueue(this.queue, {
-      durable: true,
-      arguments: { "x-dead-letter-exchange": dlx },
+    // Create the main queue with dead-letter exchange
+    await this.createQueue(queue, {
+      deadLetterExchange: dlx,
     });
 
-    await channel.assertExchange(dlx, "x-delayed-message", {
-      durable: true,
+    // Create the failed queue
+    await this.createQueue(dlx);
+
+    // Create the delayed exchange
+    await this.createExchange(queue, "x-delayed-message", {
       arguments: { "x-delayed-type": "topic" },
     });
 
-    await channel.assertQueue(dlx, { durable: true });
-    await channel.bindQueue(this.queue, dlx, "#");
+    // Bind the queue to itself (for dead-letter routing)
+    const ch = await this.getChannel();
+    await ch.bindQueue(queue, queue, "#");
   }
 
-  // ✅ These methods ensure chaining works correctly:
-  tries(attempts) {
-    this._tries = attempts;
-    return this;
+  // Bind events to the queue
+  async bindEvents() {
+    const exchange = this.exchange; // Use the fully namespaced exchange name
+    const ch = await this.getChannel();
+
+    // Bind user-defined events
+    this._events.forEach((event) => ch.bindQueue(this.queue, exchange, event));
+
+    // Bind system events (e.g., system.ping.1)
+    Object.keys(this.handlers).forEach((systemEvent) => {
+      ch.bindQueue(this.queue, exchange, systemEvent);
+    });
   }
 
-  backoff(seconds) {
-    this._backoff = Array.isArray(seconds) ? seconds : [seconds];
-    return this;
-  }
-
-  catch(callback) {
-    this.catchCallback = callback;
-    return this;
-  }
-
-  failed(callback) {
-    this.failedCallback = callback;
-    return this;
-  }
-
-  async consume(callback, debugCallback = null) {
+  // Start consuming messages
+  async consume(handler) {
     await this.init();
-    this.callback = callback;
-    this.debugCallback = debugCallback;
+    const ch = await this.getChannel();
+    ch.prefetch(1); // Process one message at a time
 
-    const channel = await this.getChannel();
-    await channel.prefetch(1);
+    ch.consume(this.queue, async (msg) => {
+      const message = this.parseMessage(msg);
 
-    channel.consume(this.queue, async (msg) => {
-      if (msg) {
-        const message = NanoServiceMessage.fromJson(msg.content.toString());
-        const eventType = message.type;
-        let retryCount = (message.getRetryCount() || 0) + 1;
+      console.log(
+        "#" + message.getRetryCount() + " Message received in: ",
+        msg.content.toString()
+      ); // Debugging
 
-        const handler = this.handlers[eventType] || this.callback;
-
-        try {
-          await handler(message);
-          channel.ack(msg);
-        } catch (error) {
-          if (retryCount < this._tries) {
-            if (this.catchCallback) {
-              this.catchCallback(error, message);
-            }
-            const headers = {
-              "x-delay": this.getBackoff(retryCount),
-              "x-retry-count": retryCount,
-            };
-            channel.publish(
-              this.exchange,
-              eventType,
-              Buffer.from(message.toJson()),
-              { headers }
-            );
-            channel.ack(msg);
-          } else {
-            if (this.failedCallback) {
-              this.failedCallback(error, message);
-            }
-            const headers = { "x-retry-count": retryCount };
-            channel.publish(
-              "",
-              this.queue + NanoConsumer.FAILED_POSTFIX,
-              Buffer.from(message.toJson()),
-              { headers }
-            );
-            channel.ack(msg);
-          }
+      try {
+        if (this.handlers[message.getEventName()]) {
+          // Handle system events
+          console.log("System event received: " + message.getEventName()); // Debugging
+          await this.handlers[message.getEventName()](message);
+          ch.ack(msg);
+          return;
         }
+
+        console.log("User event received: " + message.getEventName()); // Debugging
+
+        await handler(message);
+        ch.ack(msg);
+      } catch (err) {
+        await this.handleError(msg, err);
       }
     });
   }
 
-  async shutdown() {
-    if (this.channel) await this.channel.close();
-    if (this.connection) await this.connection.close();
+  // Parse an AMQP message into a NanoServiceMessage
+  parseMessage(msg) {
+    const body = JSON.parse(msg.content.toString());
+    const properties = msg.properties; // Preserve the original properties
+    return new NanoServiceMessage(body, properties);
   }
 
-  getBackoff(retryCount) {
-    return (
-      (this._backoff[Math.min(retryCount - 1, this._backoff.length - 1)] || 0) *
-      1000
-    );
+  // Handle errors during message processing
+  async handleError(msg, error) {
+    // Ensure headers object exists
+    if (!msg.properties.headers) {
+      msg.properties.headers = {};
+    }
+
+    const retryCount = msg.properties.headers["x-retry-count"] || 0;
+    if (retryCount < this._tries) {
+      await this.retryMessage(msg, retryCount);
+    } else {
+      await this.sendToFailedQueue(msg, error);
+    }
+  }
+
+  // Retry a failed message with backoff
+  async retryMessage(msg, retryCount) {
+    const delay = this.calculateBackoff(retryCount);
+    const ch = await this.getChannel();
+
+    // Ensure headers object exists
+    if (!msg.properties.headers) {
+      msg.properties.headers = {};
+    }
+
+    // Update retry count and delay
+    msg.properties.headers["x-retry-count"] = retryCount + 1;
+    msg.properties.headers["x-delay"] = delay;
+
+    // Preserve the original properties and merge headers
+    const properties = {
+      ...msg.properties, // Copy all original properties
+      headers: {
+        ...msg.properties.headers, // Copy all original headers
+        "x-retry-count": retryCount + 1,
+        "x-delay": delay,
+      },
+    };
+
+    // Republish the message
+    ch.publish(this.exchange, msg.fields.routingKey, msg.content, properties);
+    ch.ack(msg);
+  }
+
+  // Send a message to the failed queue
+  async sendToFailedQueue(msg, error) {
+    const ch = await this.getChannel();
+    const failedQueue = `${this.queue}${this.FAILED_POSTFIX}`;
+
+    // Parse the message and ensure it's a NanoServiceMessage instance
+    const message = this.parseMessage(msg);
+
+    // Add error details to the message
+    message.setConsumerError(error.message);
+
+    // Preserve the original properties and merge headers
+    const properties = {
+      ...msg.properties, // Copy all original properties
+      headers: {
+        ...msg.properties.headers, // Copy all original headers
+        "x-retry-count": msg.properties.headers["x-retry-count"] || 0, // Ensure x-retry-count exists
+        "x-delay": msg.properties.headers["x-delay"] || 0, // Ensure x-delay exists
+      },
+    };
+
+    // Publish to the failed queue with the preserved properties and headers
+    ch.publish("", failedQueue, message.toBuffer(), properties);
+
+    // Acknowledge the original message
+    ch.ack(msg);
+  }
+
+  // Calculate backoff time for retries
+  calculateBackoff(retryCount) {
+    return Array.isArray(this._backoff)
+      ? this._backoff[Math.min(retryCount, this._backoff.length - 1)] * 1000
+      : this._backoff * 1000;
+  }
+
+  // Handle system ping event
+  async handleSystemPing(message) {
+    console.log("System ping received:", message.getPayload());
+    // Add custom logic for handling system ping
   }
 }
 

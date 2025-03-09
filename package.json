@@ -40,9 +40,11 @@
   },
   "homepage": "https://awescode.com",
   "dependencies": {
-    "amqplib": "^0.10.3",
-    "dotenv": "^16.0.3",
-    "uuid": "^9.0.0",
-    "winston": "^3.8.2"
+    "amqplib": "^0.10.5",
+    "dotenv": "^16.4.7",
+    "hot-shots": "^10.2.1",
+    "node-rsa": "^1.1.1",
+    "uuid": "^11.1.0",
+    "winston": "^3.17.0"
   }
 }

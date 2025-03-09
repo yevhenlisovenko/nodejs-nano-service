@@ -1,4 +1,3 @@
-require("dotenv").config();
 const amqp = require("amqplib");
 
 class NanoServiceClass {
@@ -6,83 +5,68 @@ class NanoServiceClass {
     this.config = config;
     this.connection = null;
     this.channel = null;
-    this.exchange = `${process.env.AMQP_PROJECT}.bus`;
-    this.queue = this.getNamespace(process.env.AMQP_MICROSERVICE_NAME);
+    this.exchange = this.getNamespace("bus"); // Default exchange
+    this.queue = this.getNamespace(this.getEnv("AMQP_MICROSERVICE_NAME")); // Use the full namespace for the queue name
   }
 
-  async getConnection() {
+  // Get an environment variable
+  getEnv(key) {
+    const value = process.env[key];
+    if (!value) throw new Error(`Environment variable ${key} not found`);
+    return value;
+  }
+
+  // Get the project namespace
+  getProject() {
+    return this.getEnv("AMQP_PROJECT");
+  }
+
+  // Get the full namespace for a path
+  getNamespace(path) {
+    return `${this.getProject()}.${path}`;
+  }
+
+  // Connect to RabbitMQ
+  async connect() {
     if (!this.connection) {
       this.connection = await amqp.connect({
-        protocol: "amqp",
-        hostname: process.env.AMQP_HOST,
-        port: process.env.AMQP_PORT,
-        username: process.env.AMQP_USER,
-        password: process.env.AMQP_PASS,
-        vhost: process.env.AMQP_VHOST,
+        hostname: this.getEnv("AMQP_HOST"),
+        port: parseInt(this.getEnv("AMQP_PORT")),
+        username: this.getEnv("AMQP_USER"),
+        password: this.getEnv("AMQP_PASS"),
+        vhost: this.getEnv("AMQP_VHOST"),
       });
     }
     return this.connection;
   }
 
+  // Get the AMQP channel
   async getChannel() {
     if (!this.channel) {
-      const conn = await this.getConnection();
+      const conn = await this.connect();
       this.channel = await conn.createChannel();
     }
     return this.channel;
   }
 
-  async exchange(exchange, exchangeType = "topic", options = {}) {
-    this.exchange = this.getNamespace(exchange);
-    return this.createExchange(this.exchange, exchangeType, options);
+  // Create an exchange
+  async createExchange(exchange, type = "topic", options = {}) {
+    const ch = await this.getChannel();
+    await ch.assertExchange(exchange, type, options);
   }
 
-  async createExchange(exchange, exchangeType = "topic", options = {}) {
-    const channel = await this.getChannel();
-    await channel.assertExchange(exchange, exchangeType, {
-      durable: true,
-      ...options,
-    });
-    return this;
-  }
-
-  async queue(queue, options = {}) {
-    this.queue = this.getNamespace(queue);
-    return this.createQueue(this.queue, options);
-  }
-
+  // Create a queue
   async createQueue(queue, options = {}) {
-    const channel = await this.getChannel();
-    await channel.assertQueue(queue, { durable: true, ...options });
-    return this;
+    const ch = await this.getChannel();
+    await ch.assertQueue(queue, options);
   }
 
-  async declare(queue) {
-    queue = this.getNamespace(queue);
-    this.exchange = queue;
-    this.queue = queue;
-    await this.exchange(queue);
-    await this.queue(queue);
-    return this;
-  }
-
-  getProject() {
-    return process.env.AMQP_PROJECT;
-  }
-
-  getNamespace(path) {
-    return `${this.getProject()}.${path}`;
-  }
-
-  async reset() {
-    if (this.channel) {
-      await this.channel.close();
-      this.channel = null;
-    }
-    if (this.connection) {
-      await this.connection.close();
-      this.connection = null;
-    }
+  // Close the connection and channel
+  async close() {
+    if (this.channel) await this.channel.close();
+    if (this.connection) await this.connection.close();
+    this.channel = null;
+    this.connection = null;
   }
 }
 
