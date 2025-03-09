@@ -62,7 +62,7 @@ class NanoPublisher {
       arguments: { "x-delayed-type": "topic" },
     });
 
-    this.message.setEvent(event);
+    this.message.type = event;
     this.message.set(
       "app_id",
       `${process.env.AMQP_PROJECT}.${process.env.AMQP_MICROSERVICE_NAME}`
