@@ -32,13 +32,13 @@ NodeJS Nano-Service is a lightweight event-driven microservices package for **Ra
 3. Set up environment variables:
    Create a `.env` file in the root directory with the following variables:
    ```env
-   AMQP_PROJECT=easyweek-e2e
-   AMQP_MICROSERVICE_NAME=demo-nodejs
+   AMQP_PROJECT=bus-e2e
+   AMQP_MICROSERVICE_NAME=project-name
    AMQP_HOST=127.0.0.1
    AMQP_PORT=5672
    AMQP_USER=user
-   AMQP_PASS=ohCuYNimH2kq1UBuciOX
-   AMQP_VHOST=easyweek-e2e
+   AMQP_PASS=
+   AMQP_VHOST=bus-e2e
    ```
 
 ## Usage
