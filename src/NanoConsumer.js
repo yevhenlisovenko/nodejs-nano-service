@@ -5,7 +5,7 @@ const NanoServiceMessage = require("./NanoServiceMessage");
 class NanoConsumer {
   static FAILED_POSTFIX = ".failed";
 
-  constructor() {
+  constructor(events = []) {
     this.connection = null;
     this.channel = null;
     this.handlers = {};
@@ -13,9 +13,9 @@ class NanoConsumer {
     this.catchCallback = null;
     this.failedCallback = null;
     this.debugCallback = null;
-    this.events = [];
+    this.events = events; // ✅ Events now passed in constructor
     this.tries = 3;
-    this.backoff = 0;
+    this.backoff = [5, 15, 60, 300];
     this.queue = `${process.env.AMQP_PROJECT}.${process.env.AMQP_MICROSERVICE_NAME}`;
     this.exchange = `${process.env.AMQP_PROJECT}.bus`;
   }
@@ -69,18 +69,13 @@ class NanoConsumer {
     await channel.bindQueue(this.queue, this.queue, "#");
   }
 
-  events(...events) {
-    this.events = events;
-    return this;
-  }
-
   tries(attempts) {
     this.tries = attempts;
     return this;
   }
 
   backoff(seconds) {
-    this.backoff = seconds;
+    this.backoff = Array.isArray(seconds) ? seconds : [seconds];
     return this;
   }
 
@@ -98,50 +93,49 @@ class NanoConsumer {
           msg.properties
         );
         const eventType = message.type;
+        let retryCount = (message.getRetryCount() || 0) + 1;
 
         if (this.handlers[eventType]) {
-          this.handlers[eventType](message);
-          channel.ack(msg);
-          return;
+          try {
+            await this.handlers[eventType](message);
+            channel.ack(msg);
+            return;
+          } catch (error) {
+            console.error("Handler error, retrying...", error);
+          }
         }
 
-        const retryCount = (message.getRetryCount() || 0) + 1;
-        try {
-          await this.callback(message);
-          channel.ack(msg);
-        } catch (error) {
-          if (retryCount < this.tries) {
-            if (this.catchCallback) {
-              this.catchCallback(error, message);
-            }
-            const headers = {
-              "x-delay": this.getBackoff(retryCount),
-              "x-retry-count": retryCount,
-            };
-            message.set("application_headers", headers);
-            channel.publish(
-              this.queue,
-              eventType,
-              Buffer.from(message.toJson()),
-              {
-                headers,
-              }
-            );
-            channel.ack(msg);
-          } else {
-            if (this.failedCallback) {
-              this.failedCallback(error, message);
-            }
-            const headers = { "x-retry-count": retryCount };
-            message.set("application_headers", headers);
-            channel.publish(
-              "",
-              this.queue + NanoConsumer.FAILED_POSTFIX,
-              Buffer.from(message.toJson()),
-              { headers }
-            );
-            channel.ack(msg);
+        if (retryCount < this.tries) {
+          if (this.catchCallback) {
+            this.catchCallback(error, message);
           }
+          const headers = {
+            "x-delay": this.getBackoff(retryCount),
+            "x-retry-count": retryCount,
+          };
+          message.set("application_headers", headers);
+          channel.publish(
+            this.queue,
+            eventType,
+            Buffer.from(message.toJson()),
+            {
+              headers,
+            }
+          );
+          channel.ack(msg);
+        } else {
+          if (this.failedCallback) {
+            this.failedCallback(error, message);
+          }
+          const headers = { "x-retry-count": retryCount };
+          message.set("application_headers", headers);
+          channel.publish(
+            "",
+            this.queue + NanoConsumer.FAILED_POSTFIX,
+            Buffer.from(message.toJson()),
+            { headers }
+          );
+          channel.ack(msg);
         }
       }
     });
@@ -163,13 +157,10 @@ class NanoConsumer {
   }
 
   getBackoff(retryCount) {
-    if (Array.isArray(this.backoff)) {
-      return (
-        (this.backoff[Math.min(retryCount - 1, this.backoff.length - 1)] || 0) *
-        1000
-      );
-    }
-    return this.backoff * 1000;
+    return (
+      (this.backoff[Math.min(retryCount - 1, this.backoff.length - 1)] || 0) *
+      1000
+    );
   }
 }
 
