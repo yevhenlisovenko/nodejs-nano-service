@@ -1,6 +1,6 @@
 {
   "name": "nodejs-nano-service",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "A lightweight event-driven microservices package for RabbitMQ in Node.js. Enables scalable message publishing and consuming for distributed systems.",
   "main": "src/index.js",
   "scripts": {
