@@ -14,7 +14,7 @@ class NanoServiceMessage {
 
   static fromJson(jsonString) {
     const obj = JSON.parse(jsonString);
-    return new NanoServiceMessage(obj.type, obj.payload);
+    return new NanoServiceMessage(obj.type || "unknown", obj.payload || {});
   }
 }
 
