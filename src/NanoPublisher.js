@@ -35,7 +35,10 @@ class NanoPublisher {
     const exchange = `${process.env.AMQP_PROJECT}.bus`;
     const routingKey = `${process.env.AMQP_PROJECT}.${event}`;
 
-    await channel.assertExchange(exchange, "topic", { durable: true });
+    await channel.assertExchange(exchange, "x-delayed-message", {
+      durable: true,
+      arguments: { "x-delayed-type": "topic" }, // Preserve topic routing
+    });
     const message = new NanoServiceMessage(event, payload);
 
     try {

@@ -35,7 +35,10 @@ class NanoConsumer {
 
   async consume(callback) {
     const channel = await this.getChannel();
-    await channel.assertExchange(this.exchange, "topic", { durable: true });
+    await channel.assertExchange(this.exchange, "x-delayed-message", {
+      durable: true,
+      arguments: { "x-delayed-type": "topic" }, // Preserve topic routing
+    });
     await channel.assertQueue(this.queue, { durable: true });
     await channel.bindQueue(this.queue, this.exchange, this.queue);
     console.log(
