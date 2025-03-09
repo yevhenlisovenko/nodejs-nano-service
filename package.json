@@ -1,0 +1,11 @@
+{
+  "name": "nodejs-nano-service",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "amqplib": "^0.10.5",
+    "dotenv": "^16.4.7",
+    "uuid": "^11.1.0"
+  }
+}
