@@ -45,6 +45,8 @@ class NanoConsumer {
   async init() {
     await this.initialWithFailedQueue();
     const channel = await this.getChannel();
+    await channel.assertExchange(this.exchange, "topic", { durable: true });
+
     for (const event of this.events) {
       await channel.bindQueue(this.queue, this.exchange, event);
     }
@@ -57,25 +59,39 @@ class NanoConsumer {
     const channel = await this.getChannel();
     const dlx = `${this.queue}${NanoConsumer.FAILED_POSTFIX}`;
 
+    await channel.assertExchange(this.exchange, "topic", { durable: true });
+
     await channel.assertQueue(this.queue, {
       durable: true,
       arguments: { "x-dead-letter-exchange": dlx },
     });
-    await channel.assertExchange(this.queue, "x-delayed-message", {
+    await channel.assertExchange(dlx, "x-delayed-message", {
       durable: true,
       arguments: { "x-delayed-type": "topic" },
     });
     await channel.assertQueue(dlx, { durable: true });
-    await channel.bindQueue(this.queue, this.queue, "#");
+    await channel.bindQueue(this.queue, dlx, "#");
   }
 
   tries(attempts) {
+    // ✅ ADDED METHOD
     this.tries = attempts;
     return this;
   }
 
   backoff(seconds) {
+    // ✅ ADDED METHOD
     this.backoff = Array.isArray(seconds) ? seconds : [seconds];
+    return this;
+  }
+
+  catch(callback) {
+    this.catchCallback = callback;
+    return this;
+  }
+
+  failed(callback) {
+    this.failedCallback = callback;
     return this;
   }
 
@@ -105,50 +121,41 @@ class NanoConsumer {
           }
         }
 
-        if (retryCount < this.tries) {
-          if (this.catchCallback) {
-            this.catchCallback(error, message);
-          }
-          const headers = {
-            "x-delay": this.getBackoff(retryCount),
-            "x-retry-count": retryCount,
-          };
-          message.set("application_headers", headers);
-          channel.publish(
-            this.queue,
-            eventType,
-            Buffer.from(message.toJson()),
-            {
-              headers,
+        try {
+          await this.callback(message);
+          channel.ack(msg);
+        } catch (error) {
+          if (retryCount < this.tries) {
+            if (this.catchCallback) {
+              this.catchCallback(error, message);
             }
-          );
-          channel.ack(msg);
-        } else {
-          if (this.failedCallback) {
-            this.failedCallback(error, message);
+            const headers = {
+              "x-delay": this.getBackoff(retryCount),
+              "x-retry-count": retryCount,
+            };
+            channel.publish(
+              this.exchange,
+              eventType,
+              Buffer.from(message.toJson()),
+              { headers }
+            );
+            channel.ack(msg);
+          } else {
+            if (this.failedCallback) {
+              this.failedCallback(error, message);
+            }
+            const headers = { "x-retry-count": retryCount };
+            channel.publish(
+              "",
+              this.queue + NanoConsumer.FAILED_POSTFIX,
+              Buffer.from(message.toJson()),
+              { headers }
+            );
+            channel.ack(msg);
           }
-          const headers = { "x-retry-count": retryCount };
-          message.set("application_headers", headers);
-          channel.publish(
-            "",
-            this.queue + NanoConsumer.FAILED_POSTFIX,
-            Buffer.from(message.toJson()),
-            { headers }
-          );
-          channel.ack(msg);
         }
       }
     });
-  }
-
-  catch(callback) {
-    this.catchCallback = callback;
-    return this;
-  }
-
-  failed(callback) {
-    this.failedCallback = callback;
-    return this;
   }
 
   async shutdown() {
