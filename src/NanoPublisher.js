@@ -38,14 +38,14 @@ class NanoPublisher extends NanoServiceClass {
 
     // Set event and metadata
     this.message.setEvent(event);
-    this.message.set(
-      "app_id",
+    this.message.addProperty(
+      "publisher_name",
       this.getNamespace(this.getEnv("AMQP_MICROSERVICE_NAME"))
     );
 
     // Apply delay if set
     if (this.delay) {
-      this.message.set("application_headers", { "x-delay": this.delay });
+      this.message.setDelay(this.delay);
     }
 
     // Add metadata to the message

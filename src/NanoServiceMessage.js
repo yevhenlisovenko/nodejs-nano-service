@@ -39,6 +39,12 @@ class NanoServiceMessage {
     return this;
   }
 
+  // Add property to the message
+  addProperty(key, value) {
+    this.properties[key] = value;
+    return this;
+  }
+
   // Get the message payload
   getPayload() {
     return this.body.payload;
