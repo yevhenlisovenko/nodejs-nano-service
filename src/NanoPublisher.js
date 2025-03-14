@@ -38,8 +38,7 @@ class NanoPublisher extends NanoServiceClass {
 
     // Set event and metadata
     this.message.setEvent(event);
-    this.message.addProperty(
-      "publisher_name",
+    this.message.setAppId(
       this.getNamespace(this.getEnv("AMQP_MICROSERVICE_NAME"))
     );
 
@@ -54,9 +53,12 @@ class NanoPublisher extends NanoServiceClass {
     }
 
     // Publish the message
-    ch.publish(exchange, event, this.message.toBuffer(), {
-      headers: this.message.get("application_headers"),
-    });
+    ch.publish(
+      exchange,
+      event,
+      this.message.toBuffer(),
+      this.message.properties
+    );
 
     // Close the channel and connection
     await this.close();

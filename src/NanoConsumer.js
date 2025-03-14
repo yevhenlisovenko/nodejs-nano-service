@@ -117,11 +117,6 @@ class NanoConsumer extends NanoServiceClass {
     ch.consume(this.queue, async (msg) => {
       const message = this.parseMessage(msg);
 
-      console.log(
-        "#" + message.getRetryCount() + " Message received in: ",
-        msg.content.toString()
-      ); // Debugging
-
       try {
         if (this.handlers[message.getEventName()]) {
           // Handle system events

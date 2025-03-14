@@ -16,6 +16,8 @@ class NanoServiceMessage {
     this.properties = {
       messageId: uuidv4(), // Default messageId if not provided
       deliveryMode: 2, // Persistent by default
+      type: null,
+      appId: null,
       ...properties, // Override with provided properties
       headers: properties.headers || {}, // Ensure headers is always an object
     };
@@ -23,7 +25,13 @@ class NanoServiceMessage {
 
   // Set the event type
   setEvent(event) {
-    this.properties.headers.type = event;
+    this.properties.type = event;
+    return this;
+  }
+
+  // Set the event type
+  setAppId(id) {
+    this.properties.app_id = id;
     return this;
   }
 
@@ -39,15 +47,14 @@ class NanoServiceMessage {
     return this;
   }
 
-  // Add property to the message
-  addProperty(key, value) {
-    this.properties[key] = value;
-    return this;
-  }
-
   // Get the message payload
   getPayload() {
     return this.body.payload;
+  }
+
+  // Add property to the message
+  getProperty(key) {
+    return this.properties[key];
   }
 
   // Get the event type
