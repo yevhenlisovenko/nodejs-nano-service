@@ -52,6 +52,11 @@ class NanoServiceMessage {
     return this.body.payload;
   }
 
+  // Get the message meta
+  getMeta() {
+    return this.body.meta;
+  }
+
   // Add property to the message
   getProperty(key) {
     return this.properties[key];
